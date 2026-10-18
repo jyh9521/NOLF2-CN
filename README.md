@@ -1,22 +1,26 @@
 # 《无人永生 2》简体中文汉化
 
-No One Lives Forever 2: A Spy in H.A.R.M.'s Way 的社区简体中文汉化，基于 Modernizer 2，以运行时中文渲染提供界面、字幕、任务与情报文本。
+No One Lives Forever 2: A Spy in H.A.R.M.'s Way 的社区简体中文汉化，发布包为 **汉化 + Modernizer 整合包**，以运行时中文渲染提供界面、字幕、任务与情报文本。
 
 ## 支持版本与当前状态
 
-当前发布版为 **v1.1**，适用于 **NOLF2 1.3 + Modernizer 2 Beta 2c**。发布包已内置该 Modernizer 核心；源码重建则需另行准备对应组件。
+当前发布版为 **v1.1**，适用于 **NOLF2 1.3 + Modernizer 2 Beta 2c**。发布包已内置该 Modernizer 核心，玩家只需准备纯净的 NOLF2 1.3，**无需另外安装 Modernizer**，也无需单独构建中文渲染组件。源码重建则需另行准备对应组件。
 
 已完整通关测试，仍有少量漏译、图片文字与个别长帮助文本未覆盖。v1.1 统一句尾标点并修订部分措辞；根目录的[发布声明](NOLF2_汉化_发布声明.md)保留 v1.0 背景与技术说明。
 
 ## 下载
 
-[v1.1 发布页](https://github.com/jyh9521/NOLF2-CN/releases/tag/1.1)，附件为 `v1.1.zip`。源码仓库包含代理、工具与译文，不包含完整游戏或重建所需的第三方 Modernizer 文件。
+**[下载 v1.1 整合包（v1.1.zip）](https://github.com/jyh9521/NOLF2-CN/releases/download/1.1/v1.1.zip)**，或前往 [v1.1 发布页](https://github.com/jyh9521/NOLF2-CN/releases/tag/1.1)。玩家请下载该附件，而不是 GitHub 自动生成的 `Source code` 源码压缩包。
+
+整合包已包含 Modernizer 的 `Lithtech.exe`、`SDL2.dll`、`Custom/Mods/Modernizer/MODERNIZER.REZ`，以及 `NOLF2_CN` 中文运行文件和 `启动汉化版.bat`。源码仓库包含代理、工具与译文，不包含完整游戏或重建所需的第三方 Modernizer 文件。
 
 ## 安装 / 使用
 
 1. 准备纯净的 NOLF2 1.3 安装，按包内说明准备运行库；覆盖前备份原文件。
-2. 将汉化包全部内容复制到游戏根目录，与 `GAME.REZ`、`NOLF2.exe` 同级，合并并覆盖。
-3. 双击 `启动汉化版.bat`，自动加载 Modernizer 与中文。
+2. 解压 `v1.1.zip`，进入解压后的版本文件夹，将其中的**全部内容**复制到游戏根目录，与 `GAME.REZ`、`NOLF2.exe` 同级；合并 `Custom` 等文件夹，并覆盖同名文件。不要只复制 `NOLF2_CN`，也不要把整个版本文件夹作为游戏根目录下的一层子目录。
+3. 双击游戏根目录下的 `启动汉化版.bat`，自动加载 Modernizer 与中文，**无需在启动器中手动选择模组**。
+
+请保留整合包配套的 Modernizer 文件，不要再叠加其他版本的 Modernizer；本汉化的运行时代理仅适配上述版本。
 
 默认以 **1280×720 窗口模式**启动，可在游戏内调整分辨率。部分现代显卡上独占全屏启动会崩溃，请保留窗口模式。
 
