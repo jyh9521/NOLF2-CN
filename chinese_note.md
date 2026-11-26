@@ -1,114 +1,126 @@
-# NOLF2 简体中文汉化记录
+# NOLF2 简体中文汉化开发与技术记录
+
+> [!NOTE]
+> 本文档按开发阶段记录了《无人永生 2》简体中文汉化的完整逆向、试错与定型过程：
+> - **前半部分（2026-07-12 至 2026-07-14）**：当前活跃的**运行时自绘中文渲染器**架构、Modernizer `CSHELL.DLL` 逆向偏移与 vtable 表、打磨记录，以及 v1.0 / v1.1 整合包发布方案。
+> - **后半部分（2026-07-10 至 2026-07-12，第 1–24 轮）**：早期探索与已弃用的 `CRES.DLL` / 载体字节分页字体路线归档，保留作技术参考。
 
 ## 项目要求
 
 - 最终目标：实现尽可能完整、稳定、可加载的简体中文汉化。
 - 所有汉化相关工作文件放在游戏根目录的 `_work` 文件夹内。
-- 每次修改都记录：修改内容、采用技术、遇到的问题、验证结果、下一步。
-- 新步骤确认无误后，老步骤产生的无用文件归档到 `_work/archive`，不直接删除。
+- 每次修改均记录：修改内容、采用技术、遇到的问题、验证结果、下一步。
+- 新步骤确认无误后，旧步骤产生的无用文件归档到 `_work/archive`，不直接删除。
 
 ## 2026-07-13 回退到稳定可玩版（放弃窗口化全屏，撤销双钩）
 
 ### 经过
 
-- 先尝试修窗口化全屏：`run_phase1_renderer.bat` 的分辨率检测坏了（`^|` 在双引号 `-Command` 内非法 → `+ScreenWidth/Height` 为空 → 游戏回退 `DISPLAY.CFG` 的 640×480 小窗）。已改为 `for /f` + `.Where()` + `-join [char]32` 稳健检测；代理里也加过 `BorderlessThread` 去边框铺满。
-- 但用户实测：**继续游戏、载入完成后闪退。** 用户决定放弃窗口化全屏，先回到能正常游玩的版本、专注汉化。
+- 先尝试修复窗口化全屏：`run_phase1_renderer.bat` 的分辨率检测失效（`^|` 在双引号 `-Command` 内非法 → `+ScreenWidth/Height` 为空 → 游戏回退 `DISPLAY.CFG` 的 640×480 小窗）。改为 `for /f` + `.Where()` + `-join [char]32` 稳健检测；代理里也曾尝试加入 `BorderlessThread` 去边框铺满。
+- 实测发现：**继续游戏、载入完成后闪退。** 因此决定放弃窗口化全屏，先回到稳定可玩版本，专注汉化推进。
 
 ### 崩溃根因（关键）
 
-`runtime.log` 显示当前代理是「双钩」版：`patched CreatePolyString + CreateFormattedPolyString` + `patched plain CUIPolyString::Render` + `patched CUIFont::DrawString`。崩溃现象「载入完成后闪退」与本记录早前「打磨8 回退」记录的完全一致 —— **钩 `CreatePolyString`(0x38) 会在载入结束时闪退**。当时已定为「只钩格式 poly 的稳定版」。这次又把双钩打开了，于是复现崩溃。窗口/分辨率不是主因。
+`runtime.log` 显示当前代理处于「双钩」模式：`patched CreatePolyString + CreateFormattedPolyString` + `patched plain CUIPolyString::Render` + `patched CUIFont::DrawString`。崩溃现象「载入完成后闪退」与早前「打磨 8 回退」记录的完全一致 —— **挂钩 `CreatePolyString`（`0x38`）会在载入结束时闪退**。此前已定为「只钩格式 poly 的稳定版」，本次重新打开双钩后复现了崩溃，窗口/分辨率并非主因。
 
 ### 修改内容（回退）
 
 - `_work/proxy_cshell_renderer/cshell_proxy_renderer.cpp`：
-  - **删除无边框全屏逻辑**（`BorderlessThread`/`EnumProc`/`CreateThread`）。载入时引擎重置 D3D 设备，代理再 `SetWindowLong`/`SetWindowPos` 抢窗口会崩。现在代理完全不碰窗口。（此项此前已被移除，确认干净。）
-  - **撤销双钩，回到只钩 `CreateFormattedPolyString` 的稳定版**：`TryPatchFontManager` 不再 patch `VF_CreatePoly`；`CnCreateFormattedHook` 不再调 `PatchFontDrawString`（那是个纯诊断探针，无翻译作用）。运行时只安装：格式 poly 创建钩 + 其 `Render` 钩。`CnCreatePolyHook`/`CnDrawStringHook`/`PatchFontDrawString` 保留为死代码（永不安装），不影响。
+  - **移除无边框全屏逻辑**（`BorderlessThread` / `EnumProc` / `CreateThread`）。载入时引擎会重置 D3D 设备，代理再调用 `SetWindowLong` / `SetWindowPos` 抢占窗口会触发崩溃。回退后代理完全不干预窗口（确认清理干净）。
+  - **撤销双钩，回到只钩 `CreateFormattedPolyString` 的稳定版**：`TryPatchFontManager` 不再 patch `VF_CreatePoly`；`CnCreateFormattedHook` 不再调用 `PatchFontDrawString`（仅作诊断探针，无翻译作用）。运行时仅安装：格式 poly 创建钩 + 对应的 `Render` 钩。`CnCreatePolyHook` / `CnDrawStringHook` / `PatchFontDrawString` 保留为死代码（永不安装），不影响运行。
   - 日志标记改为 `patched CreateFormattedPolyString (formatted-only stable)`。
-  - 代价：仅那条滚动长帮助（id 11016）保持英文，可接受。
+  - 代价：仅滚动长帮助文本（ID `11016`）保持英文，可接受。
 
-### 分辨率（保留用户配置）
+### 分辨率（保留安全窗口配置）
 
-- `run_phase1_renderer.bat` 现由用户改为调用 `_work/tools/select_safe_window_resolution.ps1` 选「安全」窗口分辨率（上限 1920×1200，避开已知会崩的高模式如 2800×1800、2500×1406），兜底 1280×720。此为用户有意设置，未改动。
-- 该 ps1 支持覆盖：设环境变量 `NOLF2_CN_WIDTH/HEIGHT`，或在游戏根目录放 `NOLF2_CN_Window.cfg`（`width=.. / height=..`）。若重建后仍崩，优先把窗口分辨率调低测试。
+- `run_phase1_renderer.bat` 调用 `_work/tools/select_safe_window_resolution.ps1` 选择「安全」窗口分辨率（上限 1920×1200，避开已知会崩溃的高模式如 2800×1800、2500×1406），兜底 1280×720。
+- 该脚本支持通过环境变量 `NOLF2_CN_WIDTH` / `NOLF2_CN_HEIGHT`，或在游戏根目录放置 `NOLF2_CN_Window.cfg`（`width=...` / `height=...`）进行覆盖。若重建后仍崩，优先把窗口分辨率调低测试。
 
-### 下一步（需用户在 Windows 执行）
+### Windows 重建与验证步骤
 
-1. 重建（会重编代理）：`python _work\tools\build_phase1_renderer.py`
-2. 运行：`_work\run_phase1_renderer.bat`
-3. 预期 `runtime.log` 只出现：`patched CreateFormattedPolyString (formatted-only stable)` + `patched formatted CUIPolyString::Render`，**没有** `plain`/`CreatePolyString +`/`DrawString` 行。继续游戏载入后应不再闪退，汉化正常。
-4. 若仍崩：说明另有主因（先怀疑窗口分辨率），用 `NOLF2_CN_Window.cfg` 降到 1280×720 或更低再测，并回报 runtime.log 崩溃前最后一行。
+1. 重建（重新编译代理）：
+   ```powershell
+   python _work\tools\build_phase1_renderer.py
+   ```
+2. 启动测试：
+   ```powershell
+   .\_work\run_phase1_renderer.bat
+   ```
+3. 预期 `runtime.log` 只出现 `patched CreateFormattedPolyString (formatted-only stable)` 与 `patched formatted CUIPolyString::Render`，**不再出现** `plain` / `CreatePolyString +` / `DrawString` 行。继续游戏载入后不再闪退，汉化显示正常。
+4. 若仍崩溃，则说明另有主因（优先怀疑窗口分辨率），可通过 `NOLF2_CN_Window.cfg` 降至 1280×720 或更低复测，并查看 `runtime.log` 崩溃前最后一行。
 
 ### 结果与真正根因（已确认，2026-07-13）
 
-- 中途曾误判：低分启动能玩、高分载入崩，一度以为是"引擎不能在高分下载入关卡"。甚至在"原版"上复现过崩溃 —— **但那个"原版"其实是被我们早期实验污染过的安装**（`Game\CSHELL.DLL` 被早期 90KB 代理覆盖等），不算纯净，所以这个"引擎老毛病"的结论是**错的**。
-- 用户**纯净重装**（原版 1.3 + Modernizer2 Beta 2c + Beta2c release2 mp update）后：
-  - 原版进游戏调 4K、载入，**完全正常**。
-  - 把渲染器汉化装回去（REZ 覆盖 + 代理），进游戏调 4K、重新开始，**同样完全正常**。
-- **真正根因：文件损坏**（早期实验把 `Game\CSHELL.DLL` 改坏），与引擎、与汉化、与分辨率**都无关**。当前渲染器汉化不碰基础文件（只加 REZ 覆盖 + 新建 `CSHELL_MODERNIZER_ORIG.DLL` 供代理加载），不会再污染。
-- 代理 Modernizer 版本核对：`_work/extract_modernizer/CSHELL.DLL`(2.25MB) 的代码切片与重装后的 `MODERNIZER.REZ` 逐字节吻合 → 硬编码偏移仍有效。
-- **启动方式改回默认 + 修掉"每次重置"根因**：
-  - 现象：去掉分辨率强制后，游戏仍每次以窗口 1024×768 启动，游戏内设的全屏/分辨率不保存。
-  - 根因：NOLF2.exe launcher 的 **Advanced Options → "Restore Defaults" 复选框**曾被勾选，往 `launchcmds.txt` 写入了 `+RestoreDefaults 1`。源码 `ProfileMgr.cpp:1565` `if (GetConsoleInt("RestoreDefaults",0)) m_profile.RestoreDefaults(PROFILE_ALL)` → **每次启动都把 profile 重置回出厂默认**（窗口 1024×768、默认按键/音效）。玩家真正的存档在 `autoexec.cfg`（`Windowed 0` / 3840×2160），被它清掉。
-  - 第一次修法（错）：只剥掉 flag、不加任何 display 参数，以为游戏会读 `autoexec.cfg` 自己决定窗口/全屏 —— **结果仍窗口化启动**。
-  - **纠正**：LithTech 引擎在**建初始渲染窗口**时，窗口/全屏与分辨率只看**命令行** `+Windowed/+ScreenWidth/+ScreenHeight`，**不读 `autoexec.cfg`**（autoexec 的 `Windowed` 只被游戏 DLL 用于选项菜单）。命令行不给 → 引擎默认小窗。
-  - 尝试全屏（失败）：新增 `_work/tools/build_launch_cmdfile.ps1`，从 `autoexec.cfg` 读设置并显式拼 `+Windowed 0 +ScreenWidth 3840 +ScreenHeight 2160`。**实测 `+Windowed 0`（独占全屏）在启动时直接闪退** —— 印证最早那条"独占全屏在现代 GPU 上崩"的警告。启动期独占全屏这条路不通。
-  - **当前落地（安全窗口）**：`build_launch_cmdfile.ps1` 改为：① 剥掉 `+RestoreDefaults` 及残留 display flag（免得每次重置按键/设置）；② 固定 `+Windowed 1 +ScreenWidth 1280 +ScreenHeight 720 +BitDepth 32` + 汉化 REZ。窗口 720p 稳定启动、中文正常，玩家可进游戏再调分辨率。`run_phase1_renderer.bat`（bash 重写，去掉此前 file-tool 写入残留的 NUL 尾巴）/ `build_phase1_renderer.py` 调用它。
-  - 全屏诉求暂缓：启动期独占全屏崩；若日后要全屏，方向是"无边框窗口"（早前的 borderless helper 曾崩，但那是污染安装期；纯净版可另行验证），不是 `+Windowed 0`。
-  - `select_safe_window_resolution.ps1` / `NOLF2_CN_Window.cfg` 不再被调用（保留备用，可删）。
-- 工作文件在重装期间整体备份到根目录 `NOLF2_CN_WORK_BACKUP_20260713/`（含 README + `game_dll_backups/`），重装后已把 `_work`、`chinese_note.md` 挪回根目录；备份文件夹保留作安全副本。
+- 中途曾出现误判：低分辨率启动能玩、高分辨率载入崩，一度怀疑是“引擎无法在高分辨率下载入关卡”，甚至在“原版”上也复现过崩溃 —— **但那个“原版”实际上是被早期实验污染过的安装**（`Game\CSHELL.DLL` 被早期 90 KB 代理覆盖等），并不纯净，因此“引擎老毛病”的结论是**错误的**。
+- **纯净重装**（原版 1.3 + Modernizer 2 Beta 2c + Beta 2c release2 mp update）后实测：
+  - 原版进游戏调 4K、载入关卡，**完全正常**。
+  - 装回渲染器汉化（REZ 覆盖 + 代理），进游戏调 4K、重新开始，**同样完全正常**。
+- **真正根因：文件损坏**（早期实验把 `Game\CSHELL.DLL` 改坏），与引擎、汉化、分辨率**均无关**。当前渲染器汉化不修改基础文本文件（仅通过 REZ 覆盖 + 新建 `CSHELL_MODERNIZER_ORIG.DLL` 供代理加载），不会再造成污染。
+- 代理 Modernizer 版本核对：`_work/extract_modernizer/CSHELL.DLL`（2.25 MB）的代码切片与重装后的 `MODERNIZER.REZ` 逐字节吻合，硬编码偏移继续有效。
+- **启动方式改回默认 + 修复“每次重置设置”根因**：
+  - 现象：去掉分辨率强制后，游戏仍每次以窗口 1024×768 启动，游戏内设置的全屏/分辨率无法保存。
+  - 根因：`NOLF2.exe` 启动器的 **Advanced Options → “Restore Defaults”** 复选框曾被勾选，往 `launchcmds.txt` 写入了 `+RestoreDefaults 1`。源码 `ProfileMgr.cpp:1565` 中 `if (GetConsoleInt("RestoreDefaults",0)) m_profile.RestoreDefaults(PROFILE_ALL)` 会导致**每次启动都将 profile 重置回出厂默认**（窗口 1024×768、默认按键/音效），清掉玩家在 `autoexec.cfg` 中的设置（`Windowed 0` / 3840×2160）。
+  - 第一次修复尝试（无效）：仅剥离该 flag、不附加 display 参数，寄希望于引擎读取 `autoexec.cfg` 自行决定窗口/全屏 —— **结果仍窗口化启动**。
+  - **纠正**：LithTech 引擎在**创建初始渲染窗口**时，窗口/全屏与分辨率只看**命令行** `+Windowed` / `+ScreenWidth` / `+ScreenHeight`，**不读 `autoexec.cfg`**（`autoexec.cfg` 的 `Windowed` 仅被游戏 DLL 用于选项菜单）。命令行缺省时引擎默认小窗。
+  - 尝试全屏启动（失败）：新增 `_work/tools/build_launch_cmdfile.ps1`，从 `autoexec.cfg` 读取设置并显式拼接 `+Windowed 0 +ScreenWidth 3840 +ScreenHeight 2160`。**实测 `+Windowed 0`（独占全屏）在启动时直接闪退**，印证了“独占全屏在部分现代 GPU 上启动崩溃”的限制。
+  - **当前落地（安全窗口模式）**：`build_launch_cmdfile.ps1` 改为：① 剥离 `+RestoreDefaults` 及残留 display flag（避免每次重置按键与设置）；② 固定附加 `+Windowed 1 +ScreenWidth 1280 +ScreenHeight 720 +BitDepth 32` + 汉化 REZ。窗口 720p 稳定启动、中文正常，进入游戏后再自行调整分辨率。`run_phase1_renderer.bat`（重写以清除此前写入残留的 NUL 尾字节）与 `build_phase1_renderer.py` 均调用该脚本。
+  - 全屏诉求暂缓：启动期独占全屏会崩溃；日后如需全屏，应走“无边框窗口”方向（早期 borderless helper 崩溃发生在污染安装期，纯净版可另行验证），而非 `+Windowed 0`。
+  - `select_safe_window_resolution.ps1` / `NOLF2_CN_Window.cfg` 不再被调用（保留备用）。
+- 工作文件在重装期间整体备份到根目录 `NOLF2_CN_WORK_BACKUP_20260713/`（含 README 与 `game_dll_backups/`），重装后已将 `_work`、`chinese_note.md` 迁回根目录，备份文件夹保留作安全副本。
 
 ### 归档清理（2026-07-13）
 
-确认自绘渲染器路线稳定可玩后，把早期载体/CRES/逐屏探针路线的无用产物统一归档到 `_work/archive/20260713_pre_ch2_cleanup/`（未删除）：
+确认自绘渲染器路线稳定可玩后，将早期载体 / CRES / 逐屏探针路线的历史产物统一归档到 `_work/archive/20260713_pre_ch2_cleanup/`（未删除）：
 
 - `builds/`：26 个旧构建输出目录（smoke、encoded、menu_stage、各设置页探针、subtitle 载体、`build_full_import_modernizer` 等）。
 - `proxies/`：`proxy_cshell`（早期代理）、`proxy_cshell_modernizer`（载体方案，已弃用）、`borderless`（独立无边框 helper EXE，已弃用）、`extract_lfp`。
 - `runbats/`：27 个旧 `run_*.bat`（保留 `run_phase1_renderer.bat`）。
-- `tools/`：23 个载体/CRES/探针构建脚本（各 `*_pack.py`、`build_encoded_font_smoke.py`、`build_full_import_modernizer.py`、`build_menu_stage1_encoded.py`、`build_cres_resdll.ps1`、`patch_pe_stringtable.py` 等）。
+- `tools/`：23 个载体 / CRES / 探针构建脚本（各 `*_pack.py`、`build_encoded_font_smoke.py`、`build_full_import_modernizer.py`、`build_menu_stage1_encoded.py`、`build_cres_resdll.ps1`、`patch_pe_stringtable.py` 等）。
 - `misc/`：`cn_all_strings_pages.tsv`、`cn_subtitles_ascii.tsv`、`borderless_runtime.log`、`patch/`（CRES 翻译模板）。
 
-**当前活跃管线（保留）**：`proxy_cshell_renderer/`、`build_cn_renderer/`（图集 DTX/MET）、`build_phase1_renderer/`（输出 REZ）、`extract_modernizer/CSHELL.DLL`、`translation/`（词表源）、`run_phase1_renderer.bat`；工具只留 `build_phase1_renderer.py`、`build_cn_glyph_atlas.py`、`build_cn_dict.py`、`select_safe_window_resolution.ps1`，以及翻译提取用的 `extract_translation_tables.py`、`extract_remaining_after_chapter01.py`、`extract_pe_stringtable.py`。`analysis/`、`source/`、`backup_before_modernizer_*` 作为参考保留。
+**当前活跃管线（保留）**：`proxy_cshell_renderer/`、`build_cn_renderer/`（图集 DTX / MET）、`build_phase1_renderer/`（输出 REZ）、`extract_modernizer/CSHELL.DLL`、`translation/`（词表源）、`run_phase1_renderer.bat`；工具保留 `build_phase1_renderer.py`、`build_cn_glyph_atlas.py`、`build_cn_dict.py`、`select_safe_window_resolution.ps1`，以及翻译提取脚本 `extract_translation_tables.py`、`extract_remaining_after_chapter01.py`、`extract_pe_stringtable.py`。`analysis/`、`source/`、`backup_before_modernizer_*` 作为参考保留。
 
 ### 开源备份 + 代码清理（2026-07-14）
 
-- 整理源码仓库 `NOLF2_CN_source_repo/`（+ 同名 zip）用于 GitHub 备份/续开发：按 `_work/` 布局收
-  代理源码、全部 py/ps1 工具、`translation/*.tsv`、`chinese_note.md`、发布声明、`README.md`、`.gitignore`。
-  **排除**游戏本体/Modernizer/生成物/`_work/source`(官方源码)/archive/analysis 等（版权+体积+可重生成）。
-- README 写明构建前置：NOLF2 1.3+Modernizer2 Beta2c、MSVC(x86)、Python+Pillow、SimHei、LithRez、
-  以及需自备 `_work/extract_modernizer/CSHELL.DLL`（Modernizer 原始 CSHELL，第三方版权不入库）。
-- 代码卫生修复：`cshell_proxy_renderer.cpp` 末尾有 98 个 NUL 尾字节（file-tool 写入残留，全在最后 `}` 之后，
-  编译器容忍未报错），已 `rstrip` 清除（30213→30115 字节）。工作区与仓库副本均已干净。
-- 版权提示：`translation/*.tsv` 含游戏英文原文，建议如需备份用私有仓库。
+- 整理源码仓库 `NOLF2_CN_source_repo/`（及同名 zip）用于 GitHub 备份与后续开发：按 `_work/` 布局收录代理源码、全部 `.py` / `.ps1` 工具、`translation/*.tsv`、`chinese_note.md`、发布声明、`README.md` 与 `.gitignore`。**排除**游戏本体、Modernizer 文件、构建生成物、`_work/source`（官方源码）、`archive`、`analysis` 等（出于版权、体积与可重生成考虑）。
+- README 写明构建前置：NOLF2 1.3 + Modernizer 2 Beta 2c、MSVC（x86）、Python + Pillow、SimHei、LithRez，以及需自备 `_work/extract_modernizer/CSHELL.DLL`（Modernizer 原始 CSHELL，因第三方版权不入库）。
+- 代码卫生修复：`cshell_proxy_renderer.cpp` 末尾存在 98 个 NUL 尾字节（此前工具写入残留，位于最后一个 `}` 之后，编译器未报错），已 `rstrip` 清除（30213 → 30115 字节），工作区与仓库副本均已清理干净。
+- 版权提示：`translation/*.tsv` 含游戏英文原文，备份时请留意相关版权风险。
 
-### 发布包 v1.1：NOLF2_CN 结构 + 集成 Modernizer（2026-07-14）
+### 发布包 v1.1：`NOLF2_CN` 结构 + 集成 Modernizer（2026-07-14）
 
-用户要求：① 发布包用干净的 `NOLF2_CN\` 文件夹（不要 `_work` 残留）；② 把 Modernizer 2 核心集成进包（玩家只需纯净版 1.3）。
+改进目标：① 发布包使用干净的 `NOLF2_CN\` 目录（不再带 `_work` 残留）；② 集成 Modernizer 2 核心（玩家只需纯净版 1.3）。
 
-- **改代理硬编码路径**（`cshell_proxy_renderer.cpp`，需重编）：MET/STRINGS/runtime.log/CSHELL_ORIG 四处从 `_work\...`、`Game\` 改到 `<root>\NOLF2_CN\`。DTX 仍走 REZ（`Interface\Fonts\NOLF2CN_ATLAS.DTX`），不变。
-- **构建脚本**（`build_phase1_renderer.py`）：`stage()` 现额外生成 `<root>\NOLF2_CN\{NOLF2CN_ATLAS.MET, NOLF2CN_STRINGS.bin, CSHELL_MODERNIZER_ORIG.DLL}`；dev bat 去掉 Game\ 复制、log 改 `NOLF2_CN\runtime.log`。
-- **Modernizer 核心识别**（按日期 2020+）：`Lithtech.exe`/`SDL2.dll`/`NOLF2Srv.exe`/`osslicenses.txt`(2020-12-24)、`Update_v1x3_GUI.REZ`(2021)、`ModernizerReadme.txt`/`JServerDir.dll`/`JServerInfo.txt`(2026 mp update)、`Custom\Mods\Modernizer\MODERNIZER.REZ`。**不含** 4.4GB Upscale 高清包（用户选择）。基础大 rez（GAME*.REZ 等 2002-2003）来自玩家纯净版 1.3，不打包。
-- **集成打包器**（`_work/tools/make_cn_release.py`，Windows 运行）：组装 Modernizer 核心 + `NOLF2_CN\`(REZ/MET/STRINGS/CSHELL_ORIG) + 预生成 `launchcmds_cn.txt`（从 launchcmds.txt 砍掉 +RestoreDefaults 起的默认段，保留 rez/mod/gameplay，追加窗口 1280x720 + 汉化 REZ，玩家无需再跑 NOLF2.exe 选模组）+ `启动汉化版.bat` + `安装说明.txt` → 输出 `NOLF2_简体中文汉化_v1.0.zip`。启动行已静态验证：`+mod Modernizer` 在、无 +RestoreDefaults/+SetPerformanceLevel、窗口 720p + CN rez。
-- **发布结构**（覆盖纯净版 1.3）：根目录放 Modernizer 核心 exe/dll/rez + `启动汉化版.bat`、`安装说明.txt`、`Custom\Mods\Modernizer\`、`NOLF2_CN\`（全部汉化文件收拢于此）。
-- 待办（需用户 Windows 执行）：`python _work\tools\build_phase1_renderer.py`（重编新路径）→ `_work\run_phase1_renderer.bat` 快速验证中文仍正常 → `python _work\tools\make_cn_release.py` 出包。
+- **修改代理硬编码路径**（`cshell_proxy_renderer.cpp`，需重编）：MET / STRINGS / `runtime.log` / `CSHELL_ORIG` 四处路径从 `_work\...`、`Game\` 迁至 `<root>\NOLF2_CN\`。DTX 仍通过 REZ 加载（`Interface\Fonts\NOLF2CN_ATLAS.DTX`），保持不变。
+- **构建脚本**（`build_phase1_renderer.py`）：`stage()` 额外生成 `<root>\NOLF2_CN\{NOLF2CN_ATLAS.MET, NOLF2CN_STRINGS.bin, CSHELL_MODERNIZER_ORIG.DLL}`；开发启动脚本移除 `Game\` 复制步骤，日志路径改为 `NOLF2_CN\runtime.log`。
+- **Modernizer 核心文件识别**（按日期 2020+）：`Lithtech.exe`、`SDL2.dll`、`NOLF2Srv.exe`、`osslicenses.txt`（2020-12-24）、`Update_v1x3_GUI.REZ`（2021）、`ModernizerReadme.txt`、`JServerDir.dll`、`JServerInfo.txt`（2026 mp update）、`Custom\Mods\Modernizer\MODERNIZER.REZ`。**不含** 4.4 GB Upscale 高清包。基础大 REZ（`GAME*.REZ` 等 2002–2003 文件）来自玩家纯净版 1.3，不纳入打包。
+- **集成打包器**（`_work/tools/make_cn_release.py`，Windows 运行）：组装 Modernizer 核心 + `NOLF2_CN\`（REZ / MET / STRINGS / `CSHELL_ORIG`）+ 预生成 `launchcmds_cn.txt`（从 `launchcmds.txt` 截去 `+RestoreDefaults` 起的默认段，保留 rez / mod / gameplay，追加窗口 1280×720 与汉化 REZ，玩家无需再跑 `NOLF2.exe` 选模组）+ `启动汉化版.bat` + `安装说明.txt` → 输出整合包。启动行静态验证通过：`+mod Modernizer` 存在、无 `+RestoreDefaults` / `+SetPerformanceLevel`、窗口 720p + 汉化 REZ。
+- **发布目录结构**（覆盖纯净版 1.3）：游戏根目录放 Modernizer 核心 exe / dll / rez、`启动汉化版.bat`、`安装说明.txt`、`Custom\Mods\Modernizer\` 以及 `NOLF2_CN\`（全部汉化文件收拢于此）。
+- 构建与出包流程（Windows）：
+  ```powershell
+  python _work\tools\build_phase1_renderer.py
+  .\_work\run_phase1_renderer.bat
+  python _work\tools\make_cn_release.py
+  ```
 
 ### 发布包 v1.0（2026-07-13）
 
-- 玩家用 maphole + 通关存档**从头测到尾，除漏译外无问题**，决定发布。
-- 打包 `NOLF2_简体中文汉化_v1.0.zip`（游戏根目录 + outputs 各一份），覆盖到纯净版测试用。
-- 内容 = 当前已测二进制原样打包（**未重编**），含代理运行时依赖的全部文件：
+- 使用 maphole 与通关存档**从头测到尾，除少量漏译外无问题**，决定发布 v1.0。
+- 打包 `NOLF2_简体中文汉化_v1.0.zip`（游戏根目录与输出目录各一份），供覆盖纯净版测试。
+- 内容为当前已测二进制原样打包（**未重编**），包含代理运行时依赖的全部文件：
   - `NOLF2_CN_PHASE1.rez`（代理 CSHELL + 图集 DTX）
-  - `Game\CSHELL_MODERNIZER_ORIG.DLL`（代理 LoadLibrary 目标）
+  - `Game\CSHELL_MODERNIZER_ORIG.DLL`（代理 `LoadLibrary` 目标）
   - `_work\build_cn_renderer\stage\Interface\Fonts\NOLF2CN_ATLAS.MET` 和 `NOLF2CN_STRINGS.bin`（代理硬编码路径读取）
-  - `启动汉化版.bat` + `build_launch_cmdfile.ps1`（剥 +RestoreDefaults、窗口 1280x720、追加 REZ）+ `安装说明.txt`
-- 已知遗留：① 代理从 `_work\...` 硬编码路径读 MET/BIN，导致发布包必须带 `_work` 子目录（要做干净版需改代理路径重编）；② 少量漏译；③ 不支持独占全屏启动。
+  - `启动汉化版.bat` + `build_launch_cmdfile.ps1`（剥离 `+RestoreDefaults`、窗口 1280×720、追加 REZ）+ `安装说明.txt`
+- v1.0 已知遗留：① 代理从 `_work\...` 硬编码路径读取 MET / BIN，导致发布包必须带 `_work` 子目录（已在 v1.1 迁至 `NOLF2_CN\`）；② 少量漏译；③ 不支持独占全屏启动。
 
-### 进度 + Steam 启动（2026-07-13）
+### 进度 + Steam 启动说明（2026-07-13）
 
-- **进度**：全量文本已导入，玩家实测**玩到第四章无问题**，继续测试中。汉化本体稳定。
-- **Steam 启动（为方便截图）**：不要把 `run_phase1_renderer.bat` 加进 Steam —— bat 末尾 `start "" Lithtech.exe` 会把游戏甩成独立进程，Steam 钩不到、覆盖层/F12 截图失效、且显示"已停止"。
-  - 正确做法：把 **`Lithtech.exe` 本体**加为非 Steam 游戏，启动选项设 `-cmdfile "C:\Games\No One Lives Forever 2\_work\build_phase1_renderer\launchcmds_phase1.txt"`，起始位置=游戏根目录。
-  - 前置：`CSHELL_MODERNIZER_ORIG.DLL` 已在位（静态）、cmdfile 已生成；只有基础 `launchcmds.txt` 变动时才需重跑 bat 重新生成 cmdfile。
-  - 仍走窗口模式（独占全屏启动会崩），窗口下 Steam 截图正常。
+- **进度**：全量文本已导入，实测**游玩至第四章无问题**，汉化本体稳定。
+- **Steam 启动（方便截图）**：不要直接把 `run_phase1_renderer.bat` 添加进 Steam —— 批处理末尾的 `start "" Lithtech.exe` 会将游戏甩成独立进程，导致 Steam 钩不住、覆盖层 / F12 截图失效并显示“已停止”。
+  - 正确做法：把 **`Lithtech.exe` 本体**添加为非 Steam 游戏，启动选项设为 `-cmdfile "C:\Games\No One Lives Forever 2\_work\build_phase1_renderer\launchcmds_phase1.txt"`，起始位置设为游戏根目录。
+  - 前置：`CSHELL_MODERNIZER_ORIG.DLL` 已就位（静态）、cmdfile 已生成；仅当基础 `launchcmds.txt` 变动时才需重跑批处理重新生成 cmdfile。
+  - 仍保持窗口模式（独占全屏启动会崩），窗口模式下 Steam 截图正常。
 
 ## 2026-07-12 全量 Modernizer 导入包
 
@@ -219,299 +231,286 @@
    - 各二级菜单标题是否从乱码变成中文（预期内容匹配已修复；若仍乱码，说明标题走的是 poly string 的 SetText 更新路径而非创建路径，下一轮需再加 SetText 钩子）。
    - 首次进二级菜单的卡顿是否可接受（页数变多，单屏可能触及更多页；如仍明显，下一轮可按“同屏字符串聚到同页”优化打包以减少每屏字体创建次数）。
 
-## 2026-07-12 转向：放弃载体方案,改做自绘中文渲染器
+## 2026-07-12 转向：放弃载体方案，改做自绘中文渲染器
 
-### 崩溃定位(上一版重建后闪退)
+### 崩溃定位（上一版重建后闪退）
 
-- 用户按上面的改动重建后,游戏一闪即退。
-- 根因:载体收窄到 `0xA1-0xDF` 后,大量字符串改用 ASCII 载体,结果 1735 条含 `%`、1759 条含 `&`。
-- `CUIFontManager::CreateFormattedPolyString` 是 printf 式格式化函数;载体 `%` 后跟一个字节 → 非法格式符 → 读不存在的可变参数 → 开局第一条这类串就崩(例:id 589 编码成 `%-`)。
-- 旧的高位版靠 `0x80-0xFF`,开局串刚好避开 `%`,所以没崩、只是缺字。
+- 按上述改动重建后，游戏一闪即退。
+- 根因：载体收窄到 `0xA1-0xDF` 后，大量字符串改用 ASCII 载体，结果有 1735 条含 `%`、1759 条含 `&`。
+- `CUIFontManager::CreateFormattedPolyString` 是 printf 风格格式化函数；载体 `%` 后跟一个字节 → 非法格式符 → 读取不存在的可变参数 → 开局第一条此类字符串就触发崩溃（例如 ID `589` 被编码成 `%-`）。
+- 旧的高位版依赖 `0x80-0xFF`，开局串刚好避开了 `%`，因此没有崩溃、仅表现为缺字。
 
-### 为什么整条"载体字节 + 位图字体"路线对简体中文受众不可行
+### 为什么“载体字节 + 位图字体”路线对简体中文受众不可行
 
-- 受众 99.99% 是简体中文系统(ACP=936)。CP936 里 `0x81-0xFE` 几乎全是 GBK 双字节前导字节,任何高位载体都会被 MBCS 合并吞字。唯一能安全穿过的只有 ASCII(0x00-0x7F)。
-- 但 ASCII 载体:
-  - 与格式符/标记冲突(`% & \ "` 必须排除,只剩约 90 个)。
-  - 单页最多约 90 个不同汉字;全量 5390 条译文里有 114 条长文本(94 条长情报 + 14 mission + 6 对白)单条不同汉字超 90,单个位图字体装不下。
-  - 需要约 458 个动态字体页,卡顿更重且稳定性存疑。
-- 结论:载体方案能做到"短文本可玩",但天生装不下长情报文档,且 locale 依赖。**已决定放弃,改做自绘渲染器。**
-- 说明:`build_full_import_modernizer.py` 与 `cshell_proxy_modernizer.cpp` 的载体方案自此弃用(不再重建);保留作历史参考。
+- 受众几乎全部使用简体中文系统（ACP = `936`）。CP936 中 `0x81-0xFE` 几乎全是 GBK 双字节前导字节，任何高位载体都会被 MBCS 合并吞字，唯一能安全穿过的只有 ASCII（`0x00-0x7F`）。
+- 但 ASCII 载体存在硬伤：
+  - 与格式符/标记冲突（`%` `&` `\` `"` 必须排除，只剩约 90 个可用载体）。
+  - 单页最多容纳约 90 个不同汉字；全量 5390 条译文中有 114 条长文本（94 条长情报 + 14 条 mission + 6 条对白）单条不同汉字数超过 90，单个位图字体装不下。
+  - 需要约 458 个动态字体页，卡顿更重且稳定性存疑。
+- 结论：载体方案只能做到“短文本可玩”，天生装不下长情报文档且依赖系统区域设置。**决定彻底放弃，改做自绘渲染器。**
+- 说明：`build_full_import_modernizer.py` 与 `cshell_proxy_modernizer.cpp` 的载体方案自此弃用（不再重建），仅保留作历史参考。
 
-### 新路线:CSHELL 代理里自绘中文(locale 无关,无分页,无载体)
+### 新路线：CSHELL 代理内自绘中文（locale 无关、无分页、无载体）
 
-核心思路:不再把中文塞进 uint8 位图字体,而是在代理里用引擎自己的 2D 绘制接口,从一张字形图集纹理上采样,自己画中文。中文文本按字符串 ID 在代理内查表拿到真实 Unicode,完全绕开 char* 经 MBCS 被破坏的问题。
+核心思路：不再把中文塞进 `uint8` 位图字体，而是在代理中利用引擎自身的 2D 绘制机制，从字形图集纹理采样并绘制中文。中文文本在代理内查表取得真实 Unicode，彻底绕开 `char*` 经 MBCS 转换被破坏的问题。
 
-已从官方源码确认引擎具备所需全部能力:
+已从官方源码确认引擎具备所需全部能力：
 
-- `g_pLTClient`(ILTClient)→ `GetDrawPrim()` 得 `ILTDrawPrim`,`GetTexInterface()` 得 `ILTTexInterface`。代理只需拿到 ILTClient 一个全局指针即可。
-- `ILTTexInterface::CreateTextureFromName(hTex, "Interface\\Fonts\\NOLF2CN_ATLAS.DTX")` 从 DTX 加载图集纹理(或 `CreateTextureFromData` 用内存像素)。
-- `ILTDrawPrim`:`SetTransformType(SCREEN)`→`SetColorOp(MODULATE)`→`SetAlphaBlendMode(BLEND_MOD_SRCALPHA)`→`SetTexture(atlas)`→`DrawPrim(LT_POLYGT4*, n)`。绘制序列在源码 `interfacebutton.cpp` 等处有现成范例。
-- `CUIPolyString` 是桥接类,`Render()`、`GetText()`、`GetPolys()`(返回 `LT_POLYGT4*` 每字一个带 UV 的四边形)、`GetPosition()`、`GetCharScreenHeight()`、`GetLength()` 均为虚函数,可 hook `Render` 并读取坐标/尺寸/颜色。
-- 图集为白色 RGB + 逐像素 alpha 覆盖;用 MODULATE 配合每串顶点色即可还原任意文字颜色。
+- `g_pLTClient`（`ILTClient`）→ `GetDrawPrim()` 获取 `ILTDrawPrim`，`GetTexInterface()` 获取 `ILTTexInterface`。
+- `ILTTexInterface::CreateTextureFromName(hTex, "Interface\\Fonts\\NOLF2CN_ATLAS.DTX")` 从 DTX 加载图集纹理（或使用 `CreateTextureFromData` 从内存像素创建）。
+- `ILTDrawPrim`：`SetTransformType(SCREEN)` → `SetColorOp(MODULATE)` → `SetAlphaBlendMode(BLEND_MOD_SRCALPHA)` → `SetTexture(atlas)` → `DrawPrim(LT_POLYGT4*, n)`。源码 `interfacebutton.cpp` 等处已有现成范例。
+- `CUIPolyString` 是桥接类，`Render()`、`GetText()`、`GetPolys()`（返回 `LT_POLYGT4*`，每字一个带 UV 的四边形）、`GetPosition()`、`GetCharScreenHeight()`、`GetLength()` 均为虚函数，可挂钩 `Render` 并读取坐标、尺寸与颜色。
+- 图集采用白色 RGB + 逐像素 alpha 覆盖，通过 `MODULATE` 配合原顶点色即可自然还原任意文字颜色。
 
-### Phase 0 已完成:字形图集生成器
+### Phase 0 已完成：字形图集生成器
 
 - 新增 `_work/tools/build_cn_glyph_atlas.py`。
-- 汇总两张 TSV 里所有非 ASCII 字形(2345 个),用 SimHei(Windows)渲染进图集。本沙箱无 SimHei,用 Noto CJK 代跑验证,逻辑正确,截图确认字形清晰。
-- 输出(`_work/build_cn_renderer/stage/Interface/Fonts/`):
-  - `NOLF2CN_ATLAS.DTX`:2048×2048 未压缩 BGRA8888,cell=40px,容量 2601 > 2345。
-  - `NOLF2CN_ATLAS.MET`:二进制度量表(magic `CNMA` + 每字 `codepoint,u0,v0,u1,v1,advance`),供代理运行时查 UV。
-  - `NOLF2CN_ATLAS_preview.png`:预览图。
-- 用户在 Windows 上重跑此脚本即可用真实 SimHei 生成正式图集。
-- 依赖:仅 Pillow(自带 FreeType);原先用的 freetype-py/numpy 已去掉,避免 Windows 缺包。若报 `No module named PIL`,先 `pip install Pillow`。
+- 汇总两张 TSV 中所有非 ASCII 字形（2345 个），在 Windows 下使用 `SimHei` 渲染进图集（离线 Linux 环境下用 Noto CJK 验证逻辑，字形清晰无误）。
+- 输出位置（`_work/build_cn_renderer/stage/Interface/Fonts/`）：
+  - `NOLF2CN_ATLAS.DTX`：2048×2048 未压缩 BGRA8888，cell = 40 px，容量 2601 > 2345。
+  - `NOLF2CN_ATLAS.MET`：二进制度量表（magic `CNMA` + 每字 `codepoint, u0, v0, u1, v1, advance`），供代理运行时查 UV。
+  - `NOLF2CN_ATLAS_preview.png`：图集预览图。
+- 在 Windows 上运行此脚本即可用本机 `simhei.ttf` 生成正式图集。
+- 依赖：仅需 `Pillow`（自带 FreeType）；已移除原先的 `freetype-py` / `numpy` 依赖，避免 Windows 环境缺包。若报 `No module named PIL`，执行 `pip install Pillow` 即可。
 
-### 分阶段里程碑(后续需在 Windows 反复重建验证)
+### 分阶段里程碑
 
-1. Phase 1(最高风险,先验证):代理里拿到 `g_pLTClient`(逆向 CSHELL 定位其全局 RVA),`CreateTextureFromName` 加载图集,在某个渲染 tick 用 `DrawPrim` 画出**一个**中文字形到屏幕固定位置。画出来即证明整条自绘链路可行。
-2. Phase 2:hook `CUIPolyString::Render`(定位其 vtable/impl),对"我们的中文串"跳过原渲染,按 `GetPosition`/`GetCharScreenHeight`/颜色,用图集自绘整串;英文串走原路。字符串内容按 ID 在代理查真实 Unicode(CRES 里存占位/ID,不再存载体)。
-3. Phase 3:字幕路径(`CHUDSubtitles`)接同一自绘器;处理换行/居中/自动换行的布局。
-4. Phase 4:全量文本(含 114 条长情报)接入,统一走自绘,无分页无载体。
+1. **Phase 1（最高风险，先验证）**：在代理中定位 `g_pLTClient` 全局 RVA，用 `CreateTextureFromName` 加载图集，验证自绘链路可行性。
+2. **Phase 2**：挂钩 `CUIPolyString::Render`（定位 vtable / impl），命中中文串时按 `GetPosition` / `GetCharScreenHeight` / 顶点色使用图集渲染整串，英文串走原路径。
+3. **Phase 3**：字幕路径（`CHUDSubtitles`）接入同一自绘器，处理换行、居中与自动换行布局。
+4. **Phase 4**：全量文本（含 114 条长情报）统一接入自绘，无分页无载体。
 
-### 下一步
+## 2026-07-12 Phase 1 逆向：CSHELL 接口全局与 vtable 偏移（已核验）
 
-- 用户可先在 Windows 用 `python _work\tools\build_cn_glyph_atlas.py` 生成 SimHei 正式图集,确认 DTX 能被游戏加载(Phase 1 前置)。
-- 我这边下一步:逆向 Modernizer `CSHELL.DLL` 定位 `g_pLTClient` 全局与 `CUIPolyString::Render`,给出 Phase 1 的代理补丁。
+对 `_work/extract_modernizer/CSHELL.DLL`（image base `0x10000000`）进行静态反汇编（`objdump`），定位自绘渲染所需的全部符号，均经多点交叉验证。
 
-## 2026-07-12 Phase 1 逆向:CSHELL 接口全局与 vtable 偏移(已核验)
+### 接口全局指针（相对 CSHELL image base 的 RVA）
 
-对 `_work/extract_modernizer/CSHELL.DLL`(image base `0x10000000`)做静态反汇编(objdump),定位自绘渲染所需全部符号。全部经多点交叉验证。
+从 `define_holder` 生成的 `CAPIHolder` 构造代码中（`movl $0, <addr>` 初始化 `ptr_var`）提取：
 
-### 接口全局指针(RVA,相对 CSHELL image base)
+| 符号 | 类型 | RVA |
+| --- | --- | --- |
+| `g_pDrawPrim` | `ILTDrawPrim*` | `0x20E8F8` |
+| `g_pFontMgr`（已有） | `ILTFontManager*` | `0x20E8FC` |
+| `g_pTexInterface` | `ILTTexInterface*` | `0x20E900` |
+| `g_pLTClient` | `ILTClient*` | `0x20E904` |
 
-从 `define_holder` 生成的 `CAPIHolder` 构造代码里,每个 holder 用 `movl $0, <addr>` 初始化 ptr_var,得到:
+四者在 `.data` 段中连续排列；这些指针在模块 DB 解析完成后（即 `SetMasterDatabase` 之后）才被填充，与 `g_pFontMgr` 同一时机可用。
 
-- `g_pDrawPrim`(ILTDrawPrim*)= RVA `0x20E8F8`
-- `g_pTexInterface`(ILTTexInterface*)= RVA `0x20E900`
-- `g_pLTClient`(ILTClient*)= RVA `0x20E904`
-- (旁证:三者与既有 `g_pFontMgr` = `0x20E8FC` 在 .data 里连续排列。)
-- 这些指针在模块 DB 解析后(即 `SetMasterDatabase` 之后)才被填充,和代理已依赖的 `g_pFontMgr` 同一时机可用。
+### `ILTDrawPrim` vtable 偏移（`IBase` 占 1 槽，已核验）
 
-### ILTDrawPrim vtable 偏移(IBase 占 1 槽,已核验)
+核验方式：统计全二进制对 `g_pDrawPrim` 的调用偏移分布，渲染状态组每项各约 24 次（每次 UI 绘制调用一次），与头文件顺序完全吻合。
 
-核验方式:统计全二进制对 `g_pDrawPrim` 的调用偏移分布,渲染状态组每项各约 24 次(每次 UI 绘制各调一次),与 header 顺序完全吻合。
+| 方法 | vtable 偏移 | 备注 |
+| --- | --- | --- |
+| `BeginDrawPrim` / `EndDrawPrim` | `0x04` / `0x08` | — |
+| `SetTexture` | `0x10` | 48 次引用 |
+| `SetTransformType` / `SetColorOp` / `SetAlphaBlendMode` | `0x14` / `0x18` / `0x1C` | 各约 24 次 |
+| `SetZBufferMode` / `SetAlphaTestMode` / `SetClipMode` / `SetFillMode` | `0x20` / `0x24` / `0x28` / `0x2C` | 各约 24 次 |
+| `DrawPrim(LT_POLYGT4*, count)` | `0x48` | 带纹理四边形 |
+| `DrawPrim(LT_POLYF4*, count)` | `0x54` | 纯色块（59 次，多数 UI 用 POLYF4） |
+| `SetXYWH(POLYGT4*)` / `SetRGBA(POLYGT4*)` | `0xA0` / `0xD0` | 带纹理路径 |
+| `SetXYWH(POLYF4*)` / `SetRGBA(POLYF4*)` | `0xAC` / `0xDC` | 纯色路径（交叉印证 `IBase+1` 模型） |
 
-- BeginDrawPrim `0x04`,EndDrawPrim `0x08`
-- SetTexture `0x10`(48 次)
-- SetTransformType `0x14`,SetColorOp `0x18`,SetAlphaBlendMode `0x1C`,SetZBufferMode `0x20`,SetAlphaTestMode `0x24`,SetClipMode `0x28`,SetFillMode `0x2C`(各约 24 次)
-- DrawPrim(LT_POLYGT4*, count)`0x48`;DrawPrim(LT_POLYF4*, count)`0x54`(纯色块 59 次,证明多数 UI 用 POLYF4)
-- SetXYWH(POLYGT4*)`0xA0`、SetRGBA(POLYGT4*)`0xD0`(带纹理路径);SetXYWH(POLYF4*)`0xAC`、SetRGBA(POLYF4*)`0xDC`(纯色路径)—— 交叉印证 IBase+1 模型。
+### `ILTTexInterface` vtable 偏移（`IBase` 占 1 槽，已核验）
 
-### ILTTexInterface vtable 偏移(IBase 占 1 槽,已核验)
+| 方法 | vtable 偏移 | 备注 |
+| --- | --- | --- |
+| `CreateTextureFromName` | `0x08` | — |
+| `GetTextureDims` | `0x18` | 调用处传 `htexture` + 两个输出局部变量，吻合 |
 
-- CreateTextureFromName `0x08`
-- GetTextureDims `0x18`(核验:调用处传 htexture + 两个输出局部变量,吻合)
+### `CUIPolyString` vtable 偏移（已核验）
 
-### CUIPolyString vtable 偏移(已核验)
+依据：既有代理已用 `vt[11]` 作为 `SetFont` 且工作正常，反推整表（`index 0` = 虚析构，`index 1` = `GetClassName`）：
 
-依据:现有代理已用 `vt[11]` 作 SetFont 且工作正常,反推整表(index0=虚析构,index1=GetClassName):
+| 方法 | vtable 偏移 | 备注 |
+| --- | --- | --- |
+| `SetColor` | `0x0C` | — |
+| `SetPosition` | `0x28` | — |
+| `SetFont` | `0x2C` | `vt[11]`，印证 |
+| `GetText` | `0x30` | — |
+| `GetPolys` | `0x34` | 返回 `LT_POLYGT4*` |
+| `GetFont` | `0x38` | — |
+| `GetPosition` | `0x40` | — |
+| `GetLength` | `0x58` | — |
+| **`Render`** | **`0x60`** | **`index 24`** |
+| `RenderClipped` | `0x64` | — |
 
-- SetColor `0x0C`,SetPosition `0x28`,SetFont `0x2C`(=vt[11],印证)
-- GetText `0x30`,GetPolys `0x34`(返回 `LT_POLYGT4*`),GetFont `0x38`,GetPosition `0x40`,GetLength `0x58`
-- **Render `0x60`(index 24)**,RenderClipped `0x64`
+### 绘制所需枚举值（头文件定义）
 
-### 绘制所需枚举值(header)
+- `TransformType`: `SCREEN = 1`
+- `ColorOp`: `MODULATE = 1`
+- `BlendMode`: `BLEND_MOD_SRCALPHA = 3`
+- `ZBuffer`: `NOZ = 2`
+- `AlphaTest`: `NOALPHATEST = 0`
+- `Clip`: `NOCLIP = 0`
+- `Fill`: `FILL = 1`
 
-- TransformType SCREEN=1;ColorOp MODULATE=1;BlendMode BLEND_MOD_SRCALPHA=3;ZBuffer NOZ=2;AlphaTest NOALPHATEST=0;Clip NOCLIP=0;Fill FILL=1。
+### Phase 1 落地方案（hello-glyph）
 
-### Phase 1 落地方案(hello-glyph)
+1. 代理转发 `SetMasterDatabase`（与既有代理一致）。
+2. 挂钩字体管理器 `CreateFormattedPolyString`（`g_pFontMgr` vtable 偏移 `0x3C`，已知），首次捕获 `CUIPolyString` 实例后读取其类 vtable，将 `Render`（偏移 `0x60`）patch 为自绘 hook（仅 patch 一次）。
+3. Render hook：先调用原 `Render` 绘制正常文本，再用 `g_pTexInterface->CreateTextureFromName` 加载图集 DTX（仅一次），按既定绘制序列设置状态并绘制单个 `LT_POLYGT4`。
+4. 验证链路成立后，在 Phase 2 将同一 Render hook 升级为查表自绘整串中文。
 
-1. 代理转发 `SetMasterDatabase`(同现有代理)。
-2. hook 字体管理器 `CreateFormattedPolyString`(g_pFontMgr vtable off `0x3C`,已知),首次拿到一个 CUIPolyString 实例后,读取其类 vtable,patch `Render`(off `0x60`)为自绘 hook(只 patch 一次)。
-3. Render hook:先调原 Render 画正常文本;再用 `g_pTexInterface->CreateTextureFromName` 加载图集 DTX(仅一次),按已知绘制序列 `SetTransformType(1)→SetColorOp(1)→SetAlphaBlendMode(3)→SetZBufferMode(2)→SetAlphaTestMode(0)→SetClipMode(0)→SetFillMode(1)→SetTexture(atlas)`,自己填一个 `LT_POLYGT4`(屏幕固定坐标 + 图集某字 UV + 白色顶点色),`DrawPrim(quad, 1)`。
-4. 屏幕上出现该中文字 → 证明"自取接口 + 加载图集 + DrawPrim 画字"整条链路成立。Phase 2 把同一 Render hook 改为按字符串 ID 查真实 Unicode、逐字自绘整串。
+### Phase 1 产出文件
 
-### Phase 1 已产出文件(待用户在 Windows 编译验证)
-
-- `_work/proxy_cshell_renderer/cshell_proxy_renderer.cpp`:渲染器代理。转发 `SetMasterDatabase`,patch 字体管理器 `CreateFormattedPolyString` 捕获 poly string 并 patch 其 `Render`(off 0x60);Render hook 里先调原渲染,再用 `g_pTexInterface`(RVA 0x20E900)加载图集 DTX、`g_pDrawPrim`(RVA 0x20E8F8)按已核验 vtable 偏移画一个 `LT_POLYGT4`。所有 RVA/偏移见上。
-- `_work/proxy_cshell_renderer/build_proxy.ps1`:MSVC 编译代理(x86,base 0x50000000,导出 SetMasterDatabase)。
-- `_work/tools/build_phase1_renderer.py`:编译代理 + 打包 REZ(CSHELL 代理 + `Interface\Fonts\NOLF2CN_ATLAS.DTX`)+ 写 `run_phase1_renderer.bat`。
-- hello 字形直接读 `_work/build_cn_renderer/stage/Interface/Fonts/NOLF2CN_ATLAS.MET` 的第一条记录(会在 runtime.log 打印是哪个字 U+xxxx)。
-
-### 运行步骤(Windows)
-
-1. `python _work\tools\build_cn_glyph_atlas.py`(已完成,生成 DTX/MET)
-2. `python _work\tools\build_phase1_renderer.py`
-3. `_work\run_phase1_renderer.bat`
-4. 看屏幕左上(约 80,80)是否出现一个白色中文字;查 `_work\proxy_cshell_renderer\runtime.log`:
-   - 应有 `patched CUIFontManager::CreateFormattedPolyString`、`patched CUIPolyString::Render`、`atlas metrics: cp=U+....`、`atlas texture created`。
-   - 若 `CreateTextureFromName rc=非0`:说明我写的最小 DTX 头不被引擎接受,下一步改用 `CreateTextureFromData`(内存 BGRA)或对齐游戏自带 DTX 头格式。
-   - 若有 patch 行但没出字:多半是绘制状态/坐标或 DrawPrim 偏移问题,按 runtime.log 定位。
+- `_work/proxy_cshell_renderer/cshell_proxy_renderer.cpp`：渲染器代理。转发 `SetMasterDatabase`，patch 字体管理器 `CreateFormattedPolyString` 捕获 poly string 并 patch 其 `Render`（偏移 `0x60`）；加载图集 DTX 并按已核验 vtable 偏移操作。
+- `_work/proxy_cshell_renderer/build_proxy.ps1`：MSVC 编译代理（x86，基址 `0x50000000`，导出 `SetMasterDatabase`）。
+- `_work/tools/build_phase1_renderer.py`：编译代理 + 打包 REZ（CSHELL 代理 + `Interface\Fonts\NOLF2CN_ATLAS.DTX`）+ 生成 `run_phase1_renderer.bat`。
+- hello 字形测试直接读取 `_work/build_cn_renderer/stage/Interface/Fonts/NOLF2CN_ATLAS.MET` 的第一条记录（在 `runtime.log` 打印对应 `U+xxxx`）。
 
 ### 编译修正
 
-- 首次编译报 C3646/C2059/C2078:`LT_VERTRGBA` 用了 LithTech 拼写 `uint8` 但未定义。已在文件头加 `typedef uint8_t uint8;`。重跑 `python _work\tools\build_phase1_renderer.py` 即可。
+- 首次编译报 `C3646` / `C2059` / `C2078`：`LT_VERTRGBA` 使用了 LithTech 的 `uint8` 拼写但未定义。已在文件头补充 `typedef uint8_t uint8;`。
 
-### Phase 1 首次运行结果:管线打通
+### Phase 1 首次运行结果：管线打通
 
-runtime.log 显示全部成功:`renderer proxy attached` → `patched CUIFontManager::CreateFormattedPolyString` → `patched CUIPolyString::Render` → `atlas metrics: cp=U+00B7` → **`atlas texture created`**。
+`runtime.log` 全部通过：`renderer proxy attached` → `patched CUIFontManager::CreateFormattedPolyString` → `patched CUIPolyString::Render` → `atlas metrics: cp=U+00B7` → **`atlas texture created`**。
 
-- 关键结论:我手写的最小 BGRA DTX 头**被引擎 `CreateTextureFromName` 接受**(rc=0,拿到 HTEXTURE),这是最大风险点,已通过。
-- Render hook 确实在渲染帧内被调用(`atlas texture created` 只在 DrawHelloGlyph 内部执行),`DrawPrim` 每帧在跑。
-- 但屏幕没看到字:hello 取的是度量表第一条 U+00B7(间隔号「·」),该字形在 40px 格子里几乎全空,放到 64px 方块里就是个几乎看不见的小点。
-- 已改为**画整张图集**(UV 0..1,屏幕左上 480×480 方块)做无歧义验证。预期看到一整片白色中文字形网格。
-- 注意:自绘只在"有 formatted poly 正在渲染"时触发。游戏内 HUD 文字是瞬时的;**在主菜单测试最稳**(菜单文字每帧都渲染,hook 每帧触发)。
+- 关键结论：手写的最小 BGRA DTX 头**被引擎 `CreateTextureFromName` 正常接受**（`rc=0`，成功拿到 `HTEXTURE`），最大风险点已通过。
+- Render hook 确实在渲染帧内执行，但首测屏幕未见明显字形是因为度量表第一条为 `U+00B7`（间隔号「·」），在 40 px 格中几乎全空；随后改为绘制整张图集（UV `0..1`，左上 480×480 方块）作无歧义验证。
+- 注意：自绘仅在有 formatted poly 渲染时触发，主菜单每帧渲染，最适合验证。
 
-### Phase 1 关键突破:可以直接控制引擎文字渲染
+### Phase 1 关键突破：直接接管引擎文字渲染
 
-多轮实测结论:
-- `CreateTextureFromName` 接受自制 BGRA DTX(`atlas texture created`),纹理这条路通。
-- 但**我自己发起的 `g_pDrawPrim->DrawPrim`(不管带不带纹理、纯色红块、设不设剔除)都不显示、也不崩溃**——引擎文字绘制应该是在一个 Begin/End 批次内完成的,我在批次外补画的图元被丢弃。这条"自己另起一笔画"的路走不通。
-- 改用 **v3 方案:在引擎绘制前,直接修改 poly string 自己的字形四边形(`GetPolys`,vtable off 0x34;`GetLength` off 0x58),再让引擎照常画。** 实测把所有顶点染红后,**菜单/标签/HUD 所有文字都变红了**(用户截图确认)。
-- 意义:
-  1. `CUIPolyString::Render`(off 0x60)hook 能拦到几乎所有文字。
-  2. 引擎不会在 Render 里重建四边形,我的修改会保留并被绘制。
-  3. 我能完全控制引擎的文字渲染 —— 只要把四边形的 UV 指到中文图集、并让这次绘制采样图集纹理,中文就能出来。
-- 这也顺带定了 Phase 2 的架构:**不再自己画,而是"改引擎的四边形 + 换这次绘制的贴图"**,绕开所有 DrawPrim 上屏问题。
+多轮实测结论：
 
-### 里程碑达成:中文已能从图集渲染到屏幕(2026-07-12)
+- `CreateTextureFromName` 接受自制 BGRA DTX（`atlas texture created`），纹理路径畅通。
+- 但**代理内自行发起的 `g_pDrawPrim->DrawPrim`（无论带纹理、纯色红块或剔除设置）均不显示也不崩溃** —— 引擎文字绘制位于特定 `Begin` / `End` 批次内，批次外补画的图元会被丢弃。
+- 改用 **v3 方案：在引擎绘制前，直接修改 poly string 自身的字形四边形（`GetPolys` 偏移 `0x34`、`GetLength` 偏移 `0x58`），再交由引擎正常绘制。** 实测将所有顶点染红后，**菜单 / 标签 / HUD 所有文字均变红**（截图确认）。
+- 意义：
+  1. `CUIPolyString::Render`（偏移 `0x60`）hook 能拦截绝大多数文字。
+  2. 引擎不会在 `Render` 内重建四边形，修改会保留并直接绘制。
+  3. 架构定型：**不再另起 `DrawPrim`，而是“改写引擎的四边形 UV/坐标 + 临时切换本次绘制的字体贴图”**，彻底绕开 `DrawPrim` 上屏问题。
 
-实测把每条 poly string 的字体贴图临时换成图集、四边形 UV 全部指到「中」(U+4E2D)后,**菜单所有文字都渲染成了 SimHei 的「中」字,颜色正确(选中项红色、其余深色),稳定不崩(swap 跑到 1801+ 帧)**。用户截图确认。
+### 里程碑达成：中文从图集渲染到屏幕（2026-07-12）
 
-已核验可用的 vtable 偏移(在既有基础上新增):
-- CUIPolyString:`GetPolys` 0x34、`GetFont` 0x38、`GetLength` 0x58、`Render` 0x60。
-- CUIFont:`GetTexture` 0x10、`SetTexture(HTEXTURE,uint16*,uint8)`(proportional 重载)0x48。
-- 关键手法:hook `Render`,调 `g_orig_render` 前把 `font->SetTexture(atlas)` + 改 UV,画完 `font->SetTexture(origTex)` 还原(同步绘制,swap-around 安全,不影响其它串)。
-- 指针合理:font=0391F8F8、origTex=0282A200、atlas=03982948,SetTexture/GetTexture 偏移正确。
-- MODULATE + 顶点色 → 文字颜色自动保留,无需额外处理。
+实测将每条 poly string 的字体贴图临时替换为图集、四边形 UV 全部指向「中」（`U+4E2D`）后，**菜单所有文字均渲染为 SimHei 的「中」字，颜色正确（选中项红色、其余深色），稳定运行不崩溃（swap 跑至 1801+ 帧）**。
 
-### 里程碑达成:真实译文已正确渲染(2026-07-12)
+新增已核验的 vtable 偏移：
 
-用一张 14 词演示表(英文→中文 codepoint),hook 里按 poly 的英文原文匹配,命中就把汉字重新排版 + 图集 UV 渲染,未命中保持英文。实测:载入关卡后的 ESC 菜单**全部显示正确中文**(系统/任务/装备/物品/情报/玩家/继续游戏/载入游戏/保存游戏/选项/离开游戏/退出/游戏已暂停),位置/颜色/排版正确,用户截图确认。主菜单仍英文只因其字符串不在演示表里。
+- `CUIPolyString`：`GetPolys` `0x34`、`GetFont` `0x38`、`GetLength` `0x58`、`Render` `0x60`。
+- `CUIFont`：`GetTexture` `0x10`、`SetTexture(HTEXTURE, uint16*, uint8)`（proportional 重载）`0x48`。
+- 核心手法：在 `Render` hook 调用 `g_orig_render` 前执行 `font->SetTexture(atlas)` 并改写 UV，绘制完毕后立即 `font->SetTexture(origTex)` 还原（同步绘制，swap-around 安全，不影响其它串）。
+- `MODULATE` 配合原顶点色，文字颜色自动保留。
 
-**最终架构确定(优雅、健壮、locale 无关、无需改 CRES):**
-1. 图集 DTX(全部字形)+ MET(codepoint→UV)。
-2. 运行时英文→中文查表(从 TSV 生成),按英文原文匹配。
-3. 渲染器代理:hook `CUIPolyString::Render`,命中则临时换字体贴图为图集 + 汉字重排 UV,画完还原。
+### 里程碑达成：真实译文正确渲染（2026-07-12）
 
-关键实现点(均已跑通):
-- 英文原文用 `GetText`(off 0x30)读,ASCII 在任何 locale 都不乱码 → 匹配 locale 无关。
-- 汉字排版:读 quad[0] 的 x/y 和字高,按字高做方块步进重排前 M 个 quad,多余 quad 顶点 alpha 置 0 隐藏。
-- MODULATE + 原顶点色 → 文字颜色自动保留。
-- 源码 .cpp 必须全 ASCII(或编译加 `/utf-8`),否则 MSVC 按 CP932 误读中文注释吃行。已在 build_proxy.ps1 加 `/utf-8`。
+使用 14 词演示表（英文 → 中文 codepoint）测试，在 hook 中按 poly 的英文原文匹配，命中则重排汉字与图集 UV，未命中保持英文。实测载入关卡后的 ESC 菜单**全部正确显示中文**（系统 / 任务 / 装备 / 物品 / 情报 / 玩家 / 继续游戏 / 载入游戏 / 保存游戏 / 选项 / 离开游戏 / 退出 / 游戏已暂停），位置、颜色与排版均正常。
 
-### 里程碑:全量汉化跑通(2026-07-12)
+**最终架构确定（locale 无关、无需修改 CRES）：**
 
-完整表(4522 条,从 TSV 生成)+ 含 ASCII 的图集接入后,用户实测**整个游戏中文化**:主菜单(单人游戏/继续游戏/多人游戏(互联网)/多人游戏(局域网)/选项/档案/退出 + 帮助行)、加载页(第1章:凯特·阿彻必须死!/ Tip)、场景字幕(H.A.R.M.秘密地下巢穴 位置不明)、游戏内目标(与羽鸟先生会合/交谈/留意他留下的信息)全部正确显示,截图确认。
+1. 图集 DTX（全部字形）+ MET（`codepoint → UV`）。
+2. 运行时英文 → 中文对照表（由 TSV 生成），按英文原文匹配。
+3. 渲染器代理：挂钩 `CUIPolyString::Render`，命中则临时切换字体贴图为图集 + 汉字重排 UV，绘制后还原。
 
-产物与命令:
-- `_work/tools/build_cn_dict.py`:从两张 TSV 生成 `NOLF2CN_STRINGS.bin`(英文→中文 codepoint,按英文排序,4522 条)。
-- `build_cn_glyph_atlas.py`:图集加 ASCII 0x21-0x7E(混排数字/英文缩写也能画),字形左对齐并存 advance。
-- `build_phase1_renderer.py`:一条命令自动跑 atlas + dict + 编译代理 + 打包。
-- 代理:启动加载 MET+BIN,hook 内按英文二分查表,命中则重排 UV+换贴图渲染。
+关键实现细节：
 
-### 打磨:比例排版 + 换行(2026-07-12)
+- 通过 `GetText`（偏移 `0x30`）读取英文原文，纯 ASCII 在任何 locale 下均不乱码。
+- 汉字排版：读取 `quad[0]` 的 `x` / `y` 与字高，按字高步进重排前 `M` 个 quad，多余 quad 的顶点 alpha 置 `0` 隐藏。
+- `.cpp` 源码需保持纯 ASCII 或在编译时传入 `/utf-8`（否则 MSVC 按 CP932 误读中文注释吃行）；已在 `build_proxy.ps1` 中添加 `/utf-8`。
 
-- 等宽方块难看 → 图集字形左对齐、按 advance 裁剪 UV;代理按每字 advance 排布(汉字近方块,ASCII 变窄)。
-- 无换行 → 用引擎原英文(已 word-wrap)的四边形横向范围作为行宽,对中文按字断行;译文 `\n` 触发换行,空格/缺字留半角间隙。
+### 里程碑：全量汉化跑通（2026-07-12）
 
-### 已知待优化(非阻塞)
+接入完整对照表（4522 条，由 TSV 生成）与包含 ASCII 的图集后，实测**整个游戏完成中文化**：主菜单（单人游戏 / 继续游戏 / 多人游戏(互联网) / 多人游戏(局域网) / 选项 / 档案 / 退出 + 帮助行）、加载页（第1章：凯特·阿彻必须死！ / Tip）、场景字幕（H.A.R.M. 秘密地下巢穴 位置不明）、游戏内目标（与羽鸟先生会合 / 交谈 / 留意他留下的信息）全部正常显示。
 
-- 居中/右对齐界面按原 x0 起排,未按中文宽度重新居中(略偏移)。
-- 重复英文原文取首条译文,个别上下文可能不准。
-- 含 `%s/%d` 的动态串运行时英文已被替换,匹配不到,保持英文。
-- 长文本换行按行宽估算,复杂排版可能与原生略有差异。
+产物与命令：
 
-### 打磨2:匹配与换行修正(2026-07-12)
+- `_work/tools/build_cn_dict.py`：从两张 TSV 生成 `NOLF2CN_STRINGS.bin`（英文 → 中文 codepoint，按英文排序，4522 条）。
+- `build_cn_glyph_atlas.py`：图集补齐 ASCII `0x21-0x7E`（支持混排数字与英文缩写），字形左对齐并记录 `advance`。
+- `build_phase1_renderer.py`：一键执行 atlas + dict + 编译代理 + 打包 REZ。
+- 代理启动时加载 MET + BIN，在 hook 内按英文二分查表，命中后重排 UV 并切换贴图渲染。
 
-用户反馈:部分英文串(机械八哥提示、帮助文本)没匹配上;对话选项等定高列表换行溢出到下一行。
+### 打磨 1：比例排版 + 换行（2026-07-12）
 
-- 匹配 bug(Fix B):`build_cn_dict.py` 之前 `.strip()` 了英文,但运行时 `GetText` 返回的是**原始 CRES 串,常带尾随空格**(如 `...Mission Status screen. `),导致 key 不等、匹配失败。已改为英文**只 unescape 不 strip**,精确等于运行时串。词条 4522→4528,机械八哥/帮助等带尾空格的串现在能匹配。
-- 换行 bug(Fix A):代理只在**原英文本身就是多行**时才对中文换行(判据:原始四边形 y 跨度 > 0.5 字高)。单行标签/定高列表项保持单行,不再换行挤进下一行。
+- 等宽方块排版观感不佳 → 图集字形改为左对齐、按 `advance` 裁剪 UV；代理按每字 `advance` 排布（汉字近方块，ASCII 变窄）。
+- 自动换行 → 以引擎原英文（已 word-wrap）的四边形横向范围作为行宽，对中文按字断行；译文 `\n` 触发换行，空格/缺字保留半角间隙。
 
-### 打磨3:格式串(%1!d! 等)支持(2026-07-12)
+### 已知待优化（非阻塞）
 
-- 问题:技能点/弹药/拾取等提示用 LithTech 定位格式 `%1!d!`,运行时数字已填入(`You received 20 skill points...`),与模板 key 不等,匹配不到。
-- 方案:`build_cn_dict.py` 把含 `%` 的 163 条拆成 **FMT 模板表**(en 与 zh 都保留格式符),主表 4365 条仍精确匹配。`.bin` 升级为 `CNS2`(main + fmt 两段)。
-- 代理:精确匹配失败时,线性扫描 fmt 模板,用 en 模板套运行时文本(格式符当通配捕获数值),再把捕获值按定位参数号回填进 zh 模板,渲染结果。已用 Python 原型验证(`获得20点技能点`、`（可用技能点：60）`)。
-- 支持 `%N!T!` 定位式与 `%[flags]T` 简单式,`%%` 转义;按参数号回填,可处理中英参数顺序不同。
+- 居中/右对齐界面按原 `x0` 起排，未按中文宽度重新居中（略有偏移，后在打磨 5 中修复）。
+- 重复英文原文取首条译文，个别上下文可能存在歧义。
+- 含 `%s` / `%d` 的动态串运行时英文已被替换，精确匹配不到（后在打磨 3 中支持）。
+- 长文本换行按行宽估算，复杂排版可能与原生略有差异。
 
-### 打磨4:格式串误匹配 + 情报@拆分(2026-07-12)
+### 打磨 2：匹配与换行修正（2026-07-12）
 
-- 便签被 `%1!d! of %2!d!` 误匹配:该数字模板把便签里 "Director **of** Gadgetry" 的 " of " 当锚点,整段英文被填进模板用图集字体重画(表现为便签字体变成汉化字体、按字符断行)。
-  - 修复:代理匹配器给格式符记录类型,**数字类 `%d/%i/%u/%x/%o` 的捕获必须是纯数字**(可带正负号),非数字则不匹配。`build_cn_dict.py` 另丢弃字面锚点 <3 字的退化模板(如 `%1!s!!`)。
-- 便签/情报其实翻译了,但存成 `标题@正文`,游戏分别显示标题(情报列表)和正文(便签),与完整 `标题@正文` 英文对不上:
-  - 修复:`build_cn_dict.py` 对含 `@` 的条目**额外拆出"标题"和"正文"两条**。主表 4365→4900,情报列表标题、便签正文均可匹配。
-- 便签本身是**文本渲染在纸张贴图上**(不是全图片),所以能汉化;只有 LOADING 大字、纸张底纹等才是真图片。
+针对部分英文串（机械八哥提示、帮助文本）未匹配，以及对话选项等定高列表换行溢出的问题：
 
-### (仍为英文的少量项)
+- **匹配修复（Fix B）**：`build_cn_dict.py` 此前对英文执行了 `.strip()`，但运行时 `GetText` 返回的是**原始 CRES 字符串，常带尾随空格**（如 `...Mission Status screen. `），导致 key 不一致。改为对英文**只 unescape 不 strip**，精确匹配运行时串；词条数从 4522 增至 4528。
+- **换行修复（Fix A）**：代理改为仅在**原英文本身即为多行**时才对中文换行（判据：原始四边形 `y` 跨度 > 0.5 倍字高），单行标签与定高列表项保持单行不溢出。
 
-- 武器专有名(Vindicator Sportsman's Crossbow、Lipstick Spy Camera 等)与个别情报标题:多为 TSV 里未填 `zh`,属翻译数据缺口,补 `zh` 即可,不是程序问题。
-- 个别目标串(如 `Recover six pages...(optional)`)运行时可能是拼接/追加 " (optional)",与单条译文不完全一致,后续可加"目标后缀"处理。
+### 打磨 3：格式串（`%1!d!` 等）支持（2026-07-12）
 
-### 打磨5:拼接串 + 嵌入名 + 字幕对齐(2026-07-12)
+- 问题：技能点、弹药、拾取等提示使用 LithTech 定位格式 `%1!d!`，运行时数字已填入（如 `You received 20 skill points...`），与模板 key 不一致。
+- 方案：`build_cn_dict.py` 将含 `%` 的 163 条拆为 **FMT 模板表**（`en` 与 `zh` 均保留格式符），主表 4365 条继续精确匹配；`.bin` 格式升级为 `CNS2`（`main` + `fmt` 两段）。
+- 代理：精确匹配失败时线性扫描 FMT 模板，用英文模板匹配运行时文本并捕获参数，再按定位参数号回填至中文模板渲染。已用 Python 原型验证（如 `获得20点技能点`、`（可用技能点：60）`）。
+- 支持 `%N!T!` 定位式与 `%[flags]T` 简单式及 `%%` 转义，按参数号回填可处理中英文参数顺序差异。
 
-第一章通关无问题。针对剩余英文残留(均为运行时拼接,item 名本身已翻译):
-- 格式串里 `%s` 捕获的内容如果本身是词条,用其译文(等级名 Amateur→业余、嵌入物品名等)。
-- 拾取提示 `<名称>!` → 查名称译文 + `!`(武士刀!、密码破译器!)。
-- `Select <名称>` / `Select <名称> : n/m` → 选择 + 名称译文 + 尾部(选择弩箭 : 10/20)。
-- 目标 `<正文> (optional)` → 正文译文 + （可选）。
-- 字幕偏左:代理读 `GetPosition`(off 0x40)锚点,按原文对齐比例 `f=(px-minX)/宽` 对单行中文重新定位(左/中/右自适应),居中字幕不再左偏。
+### 打磨 4：格式串误匹配 + 情报 `@` 拆分（2026-07-12）
 
-所有拼接/后缀处理都是数据驱动(各部件都来自词表),仅在精确匹配失败时触发。
+- 便签被 `%1!d! of %2!d!` 误匹配：该数字模板把便签中 `Director **of** Gadgetry` 的 `" of "` 当作锚点，导致整段英文被套进模板重绘。
+  - 修复：代理匹配器记录每个格式符的类型，**数字类 `%d` / `%i` / `%u` / `%x` / `%o` 的捕获必须为纯数字**（可带正负号），否则不匹配；`build_cn_dict.py` 同时丢弃字面锚点少于 3 个字符的退化模板（如 `%1!s!!`）。
+- 情报条目在词表中以 `标题@正文` 形式存储，而游戏分别渲染标题（情报列表）与正文（便签），与完整 `标题@正文` 对不上：
+  - 修复：`build_cn_dict.py` 对含 `@` 的条目**额外拆出“标题”和“正文”两条**。主表由 4365 增至 4900，情报列表标题与便签正文均可正常匹配。
+- 说明：便签本身是**文本渲染在纸张贴图上**（并非整张图片），因此可正常汉化；只有 `LOADING` 大字、纸张底纹与部分手写信件贴图属于真正的图片文字。
 
-### 打磨6:丢字隐患审计(2026-07-12)
+### 仍为英文的少量项说明
 
-系统排查可能丢中文的隐患:
-- 格式串:最多 6 占位符、最长字面段 193,均在代理上限内(8 / 255),无因超限退回英文。
-- 缓冲区:最长译文 223 字 < 512;长情报文档无截断。
-- 标签("等级:"等)为独立文本分别匹配,非拼接,无问题。
-- **唯一真隐患**:引擎按英文字数分配四边形,若译文"绘制字形数 > 英文字符数"会截断尾部。全表命中 8 条短串。
-- 修复:改短这 8 条译文使 `drawn(zh) <= len(en)`——
-  - 5 条 FMJ 弹药:`全金属被甲弹` → `全金属弹`(无损)。
-  - `ASSS`→`抗超血清`、`CIA?`→`中情局?`、`So?`→`所以?`。
-  - 复查:全表 0 条截断。
-- 通用规则:**译文的可见字形数不能超过英文原文字符数**(否则超出部分会被引擎的格子数截断)。今后新增译文若过长需注意。
+- 武器专有名（如 `Vindicator Sportsman's Crossbow`、`Lipstick Spy Camera`）与个别情报标题多为 TSV 中未填 `zh`，属翻译数据缺口，补齐译文即可。
+- 个别目标串（如 `Recover six pages...(optional)`）运行时会追加 ` (optional)` 后缀（已在打磨 5 处理）。
 
-### 打磨7:HUD弹药拼接 + 情报标题数据修 + 滚动长文本(2026-07-12)
+### 打磨 5：拼接串 + 嵌入名 + 字幕对齐（2026-07-12）
 
-- 武器 HUD 弹药 `(cur/max) <name>`(如 `(8/20) Bolt`)是代码拼接,无 CRES 模板。代理加 `(N/M) <名称>` 处理:名称在词表里则译(→`(8/20) 弩箭`),保留计数前缀。
-- 情报标题 `：装备界面`(id 25014)是**译文漏字**:英文 `Reminder: Equipment screen`,zh 少了"提醒"。已补为 `提醒：装备界面`(数据修,不用重编)。
-- 超长帮助字幕(id 11016 "The Equipment screen shows you...")词表已翻译,但游戏**滚动/逐段显示**,运行时 `GetText` 可能只返回露出的前缀,与完整英文不等而未匹配。属滚动文本边角,暂记录未修。
+第一章通关无问题。针对剩余的运行时拼接英文（物品名本身已译）：
 
-### 打磨8:同时钩普通 poly(2026-07-12)
+- 格式串中 `%s` 捕获的内容若本身在词表中，自动替换为其译文（如难度名 `Amateur` → `业余`、嵌入物品名等）。
+- 拾取提示 `<名称>!` → 查名称译文 + `!`（如 `武士刀!`、`密码破译器!`）。
+- `Select <名称>` / `Select <名称> : n/m` → `选择` + 名称译文 + 尾部（如 `选择弩箭 : 10/20`）。
+- 目标 `<正文> (optional)` → 正文译文 + `（可选）`。
+- 字幕偏左修正：代理读取 `GetPosition`（偏移 `0x40`）锚点，按原文对齐比例 `f = (px - minX) / 宽` 对单行中文重新定位（左/中/右自适应），居中字幕不再左偏。
 
-滚动长提示(id 11016)推测走的是**普通 CUIPolyString**(CreatePolyString),而之前只钩了 CreateFormattedPolyString(格式 poly),所以没被拦到。
-- 字体管理器 vtable(IBase+1):CreatePolyString = index14 = 0x38,CreateFormattedPolyString = index15 = 0x3C(已知,印证)。
-- 代理现在**两个都钩**:各自捕获其 poly 的 vtable 和原始 Render(off 0x60),CnRenderHook 里按 `self` 的 vtable 判断调用哪个原函数。
-- 普通 poly 的 Render 也被 patch 后,所有文本(格式 + 普通)都经过匹配,覆盖面更全。
-- 若滚动提示仍英文,则是运行时只返回滚动露出的前缀(需前缀匹配),再单独处理。
+上述拼接与后缀处理均为数据驱动，仅在精确匹配失败时触发。
 
-### 打磨8 回退:钩普通 poly 导致闪退(2026-07-12)
+### 打磨 6：丢字隐患审计（2026-07-12）
 
-同时钩 `CreatePolyString`(0x38)后,载入结束点按钮即闪退。原因未完全确认(可能 CreatePolyString 的偏移/签名与假设不符,或双 vtable 的原函数选择在某路径出错)。风险高、收益仅一条滚动帮助文本,**已回退为只钩格式 poly 的稳定版**,其余修复(弹药 HUD、情报标题、居中等)全部保留。
-- 若日后要处理滚动长文本,应先加"未匹配串日志"实测确认它是哪种 poly/是否返回前缀,再决定,不能盲目 patch vtable。
-- `VF_CreatePoly`/`CreatePolyFn` 常量与 typedef 保留但未使用(无害)。
+系统排查可能导致中文截断的隐患：
 
-### 打磨8 重做:稳健双钩(2026-07-12)
+- 格式串：最多 6 个占位符、最长字面段 193 字符，均在代理上限内（8 / 255），无因超限回退英文的情况。
+- 缓冲区：最长译文 223 字 < 512，长情报文档无截断。
+- 标签（如 `等级:` 等）为独立文本分别匹配，非拼接，无问题。
+- **唯一真实隐患**：引擎按英文字符数分配四边形，若译文的“可见字形数 > 英文字符数”会截断尾部。全表共命中 8 条短串。
+- 修复：缩短这 8 条译文使 `drawn(zh) <= len(en)`：
+  - 5 条 FMJ 弹药：`全金属被甲弹` → `全金属弹`
+  - `ASSS` → `抗超血清`、`CIA?` → `中情局?`、`So?` → `所以?`
+  - 复查：全表 0 条截断。
+- **通用规则**：**译文的可见字形数不能超过英文原文字符数**（否则超出部分会被引擎预分配的四边形数量截断），后续补充译文时需注意。
 
-反汇编确认字体管理器 vtable 调用偏移:0x38=CreatePolyString(16 次)、0x3C=CreateFormatted(32 次)、0x40=DestroyPolyString(63 次),**0x38 偏移正确**——上次崩溃是实现问题(按 vtable 比较挑原函数的逻辑),不是偏移。
-- 改用**两个独立 Render 钩子** `CnRenderHookFmt` / `CnRenderHookPlain`,各自调用 `g_orig_render_fmt` / `g_orig_render_plain`(在 PatchRender 时保存),`CnDoRender(self, orig, ...)` 做实际翻译。结构上不再有"挑错原函数"的隐患。
-- 同时钩 CreatePolyString + CreateFormattedPolyString(各自独立 VirtualProtect)。
-- 加"未匹配 >80 字长串"日志(封顶 40 条),用于确认滚动长文本(id 11016)是否被普通 poly 钩到、GetText 返回完整还是前缀。
-- 目标:普通 poly 也全覆盖,滚动长文本汉化。若仍崩,看 runtime.log 崩溃前最后一行定位。
+### 打磨 7：HUD 弹药拼接 + 情报标题数据修复 + 滚动长文本（2026-07-12）
 
-### 便签/信件类"图片文字"说明
+- 武器 HUD 弹药 `(cur/max) <name>`（如 `(8/20) Bolt`）由代码拼接，无 CRES 模板。代理新增 `(N/M) <名称>` 处理：名称命中词表则翻译（如 `(8/20) 弩箭`），保留计数前缀。
+- 情报标题 `：装备界面`（ID `25014`）为**译文漏字**（英文 `Reminder: Equipment screen`），已补全为 `提醒：装备界面`（纯数据修复，无需重编）。
+- 超长帮助字幕（ID `11016` `"The Equipment screen shows you..."`）词表已翻译，但游戏采用**滚动/逐段显示**，运行时 `GetText` 可能只返回露出前缀，与完整英文不等而未匹配。属滚动文本边角，暂记录未修。
 
-游戏里 Cate 捡到的纸质便签/信件是把文字**烤进 DTX 贴图**的图片,不是 poly string 文本,渲染器 hook 不到,仍显示英文。要汉化这类需要单独重绘对应 DTX 贴图(后续单独处理)。情报"日志"界面里的文本条目是文本,可正常汉化。
+### 打磨 8：同时钩普通 poly（2026-07-12，实验后回退）
 
-### 收尾待做
+- 推测滚动长提示（ID `11016`）走的是**普通 `CUIPolyString`**（`CreatePolyString`），而此前仅挂钩了 `CreateFormattedPolyString`。
+- 字体管理器 vtable（`IBase+1`）：`CreatePolyString` = `index 14` = `0x38`（16 次调用），`CreateFormattedPolyString` = `index 15` = `0x3C`（32 次调用），`DestroyPolyString` = `0x40`（63 次调用）。
+- 先后尝试过单 Render 钩判断 vtable 与双独立 Render 钩（`CnRenderHookFmt` / `CnRenderHookPlain` + 未匹配 >80 字长串日志），但实测**挂钩 `CreatePolyString`（`0x38`）均会在载入结束时触发闪退**。
+- 最终已按 2026-07-13 结论回退为**仅挂钩 `CreateFormattedPolyString` 的稳定版**，保留弹药 HUD、情报标题、居中对齐等全部其他改进。
 
-- 把演示词表换成完整表:从 `chapter01_priority.tsv` + `remaining_after_chapter01.tsv` 生成英文→中文运行时表,代理启动时加载。
-- 图集补上 ASCII 0x20-0x7E 字形(译文里可能混 ASCII 数字/符号/英文缩写,需要能渲染)。
-- 处理边角:重复英文(上下文歧义)、含 `%s/%d` 的动态串(运行时英文已被替换,匹配不到,暂留英文)。
-- 居中/右对齐界面的重排微调。
+### 便签 / 信件类“图片文字”说明
 
-### (历史)Phase 2 早期设想
+游戏中 Cate 捡到的纸质便签与手写信件部分是将文字**烘焙进 DTX 贴图**的图片，并非 poly string 文本，渲染器无法拦截，仍显示英文；如需汉化需单独重绘对应 DTX 贴图。情报“日志”界面中的文字条目属于文本，可正常汉化。
 
-- 让某条 poly string 这次绘制采样图集纹理(而非字体贴图):在 hook 内、调 `g_orig_render` 前把该 poly 的字体贴图临时换成图集,画完再换回(同步绘制,可安全 swap-around)。需要定位 CUIFont 的贴图成员/接口。
-- 占位方案:CRES 里每个汉字放一个 ASCII 占位字节(locale 安全),引擎按 N 个占位排版出 N 个四边形;hook 内把第 i 个四边形 UV 改到第 i 个汉字的图集 UV。无需分页、无需载体区分、单张图集。
-- 字符串→真实 Unicode 的识别方式(按 ID 或占位编码)待定。
+### 历史备忘（Phase 1 / 2 早期设想与风险验证）
 
-### 风险点(Phase 1 主要验证这两条)
+- 早期 Phase 2 曾考虑通过 CRES ASCII 占位字节配合 `SetTexture` swap-around，后演进为更简洁的“不改 CRES、直接按英文原文查表 + swap-around 贴图”方案。
+- Phase 1 重点验证的两大风险点（最小 DTX 头能否被 `CreateTextureFromName` 接受、菜单文本是否走 formatted poly 的 vtable）均已实测通过。
 
-- 最小 DTX 头是否被 `CreateTextureFromName` 接受(未与游戏自带 DTX 逐字段比对过)。
-- `CUIPolyString::Render` 是否对菜单文本走 formatted poly 的这个 vtable(未覆盖非 formatted 的 CreatePolyString 路径,但菜单用 formatted,足够验证)。
+> [!NOTE]
+> 以下第 1–24 轮为早期探索与已弃用的 `CRES.DLL` / 载体字节分页字体路线开发归档，保留作逆向与历史参考；当前正式方案见文档前半部分的**运行时自绘中文渲染器**章节。
 
 ## 2026-07-10 第 1 轮：项目初始化与资源确认
 
@@ -543,7 +542,7 @@ runtime.log 显示全部成功:`renderer proxy attached` → `patched CUIFontMan
 
 ### 问题
 
-- 当前 Codex 沙箱在读取/创建部分游戏目录时出现 `windows sandbox: helper_unknown_error: setup refresh had errors`，已通过用户批准的沙箱外命令完成只读盘点和 `_work` 创建。
+- 早期本地沙箱环境在读取/创建部分游戏目录时出现 `windows sandbox: helper_unknown_error: setup refresh had errors`，改为在常规 Windows 环境下完成只读盘点和 `_work` 创建。
 
 ### 验证结果
 
@@ -1905,4 +1904,5 @@ runtime.log 显示全部成功:`renderer proxy attached` → `patched CUIFontMan
   - 字幕槽只使用半角载体，保留英文 fallback 可读，避免全局/后续对白乱码。
 - 已重建机械八哥探针包：
   - `_work/build_chapter01_bird_probe_modernizer/NOLF2_CN_CHAPTER01_BIRD_PROBE_MODERNIZER.rez`
-  - 仅用于验�
+  - 仅用于验证机械八哥字幕（原始日志末尾截断，后续路线已于 2026-07-12 转向运行时自绘渲染器）。
+�
